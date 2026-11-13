@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ringfour-agent"
+version = "0.1.0"
+description = "Ringfour ROS 2 agent"
+requires-python = ">=3.10"
+dependencies = ["ringfour-sdk==0.1.0.dev0", "pyyaml>=6"]
+
+[project.scripts]
+ringfour-agent = "ringfour_agent.main:main"
+ringfour-onboard = "ringfour_agent.onboard:main"
+
+[tool.setuptools.packages.find]
+where = ["src/ringfour_agent"]
+include = ["ringfour_agent*"]

@@ -1,0 +1,13 @@
+[workspace]
+name = "ringfour-agent"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-aarch64", "linux-64"]
+
+[dependencies]
+python = "3.12.*"
+uv = "*"
+
+[tasks]
+build = "docker build --build-context sdk=../ringfour-sdk -f docker/Dockerfile -t ringfour-agent:c-preview ."
+check = "docker run --rm --network none ringfour-agent:c-preview agent --help"
+package = "uv build"

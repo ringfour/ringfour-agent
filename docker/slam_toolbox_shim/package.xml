@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<!--
+  slam_toolbox, INTERFACES ONLY.
+
+  The agent calls four slam_toolbox services (pause / reset / serialize /
+  deserialize). To call a service, rclpy needs the generated Python types -
+  but NOT the node that implements it, which runs in the robot's own SLAM
+  container. Installing the real ros-jazzy-slam-toolbox to obtain four .srv
+  files costs 1.4 GB, because it depends on rviz_default_plugins and most of
+  Nav2.
+
+  So this package regenerates the same interfaces from the same definitions.
+  The package NAME must be `slam_toolbox`: a ROS service type is identified
+  on the wire by "<package>/srv/<Name>" plus a hash of its definition, so a
+  shim under any other name would not match the running node. The .srv files
+  are not vendored here - the Dockerfile extracts them from the official
+  slam_toolbox .deb at build time, which is what keeps the definitions (and
+  therefore the hashes) exactly upstream's.
+
+  This directory is deliberately OUTSIDE ringfour-agent/src. The base101 sim
+  workspace colcon-builds that whole tree alongside a real slam_toolbox, and
+  a second package of the same name in the source path would shadow the real
+  node's overlay entry.
+-->
+<package format="3">
+  <name>slam_toolbox</name>
+  <version>0.0.0</version>
+  <description>
+    Service definitions of slam_toolbox, generated without the node.
+    Built only into the ringfour-agent image; see the comment above.
+  </description>
+  <maintainer email="cristian@ringfour.dev">Cristi Dragomir</maintainer>
+  <license>LGPL-2.1</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>rosidl_default_generators</build_depend>
+
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
