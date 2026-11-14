@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from .context import AgentContext
 
 log = logging.getLogger("ringfour_agent.server")
+_MOTION_STARTS = frozenset({'group.start_trajectory', 'group.start_tool', 'mobility.navigate_to',
+                            'mobility.start_route', 'teleop.start'})
 
 
 class RpcError(Exception):
@@ -70,6 +72,7 @@ class Session:
         self.handshaken = False
         self.audit_subscribed = False
         self.events_subscribed = False
+        self.motion_teleop_active = False
         self._payload_ids = itertools.count(1)
 
     async def send_payload(self, kind: str, meta: dict[str, Any],
@@ -121,6 +124,10 @@ class AgentServer:
 
     async def start(self) -> None:
         """Bind the listeners. Raises OSError if a bind fails."""
+        if self._ctx.motion_recorder is not None:
+            await self._ctx.motion_recorder.start()
+        if self._ctx.motion_handoff is not None:
+            await self._ctx.motion_handoff.start()
         # max_size must match the client transport's MAX_MESSAGE_BYTES;
         # websockets' 1 MiB default aborts connections on big payloads.
         if self._port is not None:
@@ -222,6 +229,10 @@ class AgentServer:
             server.close()
             await server.wait_closed()
         self._servers.clear()
+        if self._ctx.motion_recorder is not None:
+            await self._ctx.motion_recorder.close()
+        if self._ctx.motion_handoff is not None:
+            await self._ctx.motion_handoff.close()
         if self._ctx.shm is not None:
             self._ctx.shm.close()
         checkpoint = getattr(self._ctx.lock.quarantine, 'finish_boot', None)
@@ -326,10 +337,22 @@ class AgentServer:
         self._ctx.streams.on_disconnect(session)
         self._ctx.watches.on_disconnect(session.client_id)
         if self._ctx.teleop is not None:
+            stop_report = None
+            failed = True
             try:
-                await asyncio.to_thread(self._ctx.teleop.on_disconnect, session.client_id)
+                stop_report = await asyncio.to_thread(self._ctx.teleop.on_disconnect, session.client_id)
+                failed = False
             except RpcError:
                 log.exception("disconnect teleop cleanup failed; continuing other cleanup")
+            finally:
+                if session.motion_teleop_active and self._ctx.motion_recorder is not None:
+                    fields = {'operation_id': 'teleop:' + session.reconciliation_key,
+                              'session_id': session.reconciliation_key, 'owner': session.principal.identity}
+                    if (isinstance(stop_report, dict) and stop_report.get('verified') is True
+                            and stop_report.get('criterion') in ('joint-velocity-dwell', 'body-velocity-dwell')):
+                        self._ctx.motion_recorder.emit('motion.stop_verified', stop_verified=True, **fields)
+                    self._ctx.motion_recorder.emit('motion.failed' if failed else 'motion.cancelled', **fields)
+                    session.motion_teleop_active = False
         if self._ctx.actions is not None:
             try:
                 await asyncio.to_thread(self._ctx.actions.release, session.client_id)
@@ -425,10 +448,25 @@ class AgentServer:
             # Storage faults must never block the independently authorized stop path.
             if self._ctx.commands.failed and (descriptor.effect == 'stop' or (method == 'debug.set_estop' and params.get('engaged') is True)):
                 return await self._execute(session, text)
+            self._motion_refused(session, method)
             data = self._error_data(exc.error_type, method, msg.get('id'))
             data.update(exc.extra)
             return wire.error_response(msg.get('id'), wire.ERR_APPLICATION, str(exc), data)
         return await self._execute(session, text)
+
+    def _motion_refused(self, session, method):
+        recorder = self._ctx.motion_recorder
+        if recorder is not None and method in _MOTION_STARTS:
+            recorder.emit('motion.refused', session_id=session.reconciliation_key,
+                          owner=session.principal.identity)
+
+    def _motion_stop_failed(self, session, method):
+        recorder = self._ctx.motion_recorder
+        if recorder is not None and method in ('teleop.stop', 'teleop.end', 'mobility.stop'):
+            recorder.emit('motion.failed', operation_id='teleop:' + session.reconciliation_key if method.startswith('teleop.') else None,
+                          session_id=session.reconciliation_key, owner=session.principal.identity)
+            if method == 'teleop.end':
+                session.motion_teleop_active = False
 
     async def _execute(self, session: Session, text: str) -> str | None:
         try:
@@ -491,6 +529,7 @@ class AgentServer:
                                  "completion": descriptor.completion}})
             self._ctx.safety.check(session.client_id, method, descriptor=descriptor)
         except RpcError as exc:
+            self._motion_refused(session, method)
             audit.record(AuditKind.SAFETY, client=session.client_id,
                          call=method, outcome=Outcome.REJECTED,
                          detail={"reason": exc.extra.get("reason"),
@@ -517,6 +556,8 @@ class AgentServer:
                     raise RpcError("ResourceBusy", "configuration conflicts with the robot's motion owner")
             result = await handler(session, params)
         except RpcError as exc:
+            self._motion_refused(session, method)
+            self._motion_stop_failed(session, method)
             audit.record(AuditKind.RESULT, client=session.client_id,
                          call=method, outcome=Outcome.ERROR,
                          detail={"type": exc.error_type, "message": str(exc)})
@@ -526,6 +567,8 @@ class AgentServer:
                 request_id, wire.ERR_APPLICATION, str(exc), data
             )
         except Exception as exc:  # handler bug: report, don't kill the link
+            self._motion_refused(session, method)
+            self._motion_stop_failed(session, method)
             log.exception("handler %s failed", method)
             audit.record(AuditKind.RESULT, client=session.client_id,
                          call=method, outcome=Outcome.ERROR,
@@ -545,6 +588,21 @@ class AgentServer:
                      call=method, outcome=Outcome.SUCCESS,
                      detail={'event': 'handler-acknowledgement', 'command_id': current_command.get(),
                              'principal': session.principal.identity})
+        recorder = self._ctx.motion_recorder
+        if recorder is not None and method in ('teleop.start', 'teleop.stop', 'teleop.end', 'mobility.stop'):
+            fields = {'operation_id': 'teleop:' + session.reconciliation_key if method.startswith('teleop.') else None,
+                      'session_id': session.reconciliation_key, 'owner': session.principal.identity}
+            if method == 'teleop.start':
+                recorder.emit('motion.accepted', **fields)
+                session.motion_teleop_active = True
+            else:
+                evidence = result.get('stop_verification') if isinstance(result, dict) else None
+                if (isinstance(evidence, dict) and evidence.get('verified') is True
+                        and evidence.get('criterion') in ('joint-velocity-dwell', 'body-velocity-dwell')):
+                    recorder.emit('motion.stop_verified', stop_verified=True, **fields)
+                if method == 'teleop.end' and session.motion_teleop_active:
+                    recorder.emit('motion.completed', **fields)
+                    session.motion_teleop_active = False
         return wire.response(request_id, result)
 
     # -- audit tail fan-out ------------------------------------------------------

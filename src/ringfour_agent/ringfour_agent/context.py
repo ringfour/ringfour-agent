@@ -49,6 +49,9 @@ class AgentContext:
     background_halts: set = field(default_factory=set)
     guards: Any = None
     commands: Any = None
+    motion_journal: Any = None
+    motion_handoff: Any = None
+    motion_recorder: Any = None
     allow_unverified_stops: bool = False
     ros: Any = None
     teleop: "TeleopManager | None" = None

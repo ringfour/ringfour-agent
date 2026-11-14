@@ -115,7 +115,9 @@ COPY --from=builder /opt/ringfour /opt/ringfour
 # places. A volume mount point, so a container restart is not amnesia.
 ENV RINGFOUR_STATE=/var/lib/ringfour
 RUN mkdir -p "${RINGFOUR_STATE}" /etc/ringfour \
-    && chown ubuntu:ubuntu "${RINGFOUR_STATE}"
+    && mkdir -p /run/ringfour-motion \
+    && chown ubuntu:ubuntu "${RINGFOUR_STATE}" /run/ringfour-motion \
+    && chmod 700 /run/ringfour-motion
 VOLUME ["/var/lib/ringfour"]
 
 COPY --chmod=0755 docker/run.sh /entrypoint.sh

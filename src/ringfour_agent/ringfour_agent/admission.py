@@ -244,7 +244,7 @@ for name in ('slam.start', 'slam.stop', 'slam.load', 'slam.localize', 'slam.relo
                                 ownership='configuration-reservation')
 DESCRIPTORS['safety.recover'] = replace(DESCRIPTORS['safety.recover'], permission='recover',
     resource='robot.motion', ownership='no-active-acquisitions', inhibit='must-be-engaged',
-    schema=schema(('resource',), resource='string'), completion='controller-and-measured-stop-verification')
+    schema=schema(('resource',), resource='string'), completion='resource-specific-verification-inhibit-retained')
 
 
 def validate_registry(registry):

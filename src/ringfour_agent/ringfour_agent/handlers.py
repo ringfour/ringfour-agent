@@ -1892,7 +1892,10 @@ def build_registry(ctx: AgentContext) -> dict[str, Handler]:
             raise RpcError("PermissionDenied", "recovery requires an authenticated local operator")
         if ctx.tasks.has_running():
             raise RpcError("ResourceBusy", "wait for accepted work and cleanup before recovery")
-        if params['resource'] in ('restart', 'journal'):
+        if params['resource'] == 'restart-model':
+            from .recovery import recover_missing_model
+            report = await asyncio.to_thread(recover_missing_model, ctx)
+        elif params['resource'] in ('restart', 'journal'):
             from .recovery import recover_restart
             report = await asyncio.to_thread(recover_restart, ctx, params['resource'])
         elif params['resource'] == 'mobility':

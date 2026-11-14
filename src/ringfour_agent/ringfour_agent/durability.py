@@ -15,7 +15,7 @@ from .server import RpcError
 class DurableQuarantine(dict):
     def __init__(self, directory, robot, revision):
         self.mutex = RLock()
-        self.robot, self.revision = robot, revision
+        self.robot = robot
         self.path = Path(directory) / (hashlib.sha256(robot.encode()).hexdigest() + ".json")
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._lockfile = open(str(self.path) + '.lock', 'a')
@@ -34,11 +34,25 @@ class DurableQuarantine(dict):
             except Exception as exc:
                 raise RpcError("CleanupFailed", "invalid durable safety checkpoint; refusing startup") from exc
         values = previous.get('quarantine', {}).copy()
+        baseline = previous.get('model_revision')
+        # Older Agents could overwrite the checkpoint's model identity with
+        # None before the latched description arrived. Preserve the original
+        # identity retained in that quarantine rather than losing it again.
+        model_record = values.get('restart-model')
+        if (baseline is None and isinstance(model_record, dict)
+                and model_record.get('current_revision') is None
+                and isinstance(model_record.get('previous_revision'), str)):
+            baseline = model_record['previous_revision']
+        self.revision = revision if revision is not None else baseline
         if previous.get('active_boot'):
             values['restart'] = {'reason':'previous agent boot did not finish verified cleanup'}
-        if previous and previous.get('model_revision') != revision:
-            values['restart-model'] = {'reason':'robot model changed across the safety checkpoint',
-                                       'previous_revision':previous.get('model_revision'), 'current_revision':revision}
+        if previous and baseline != revision:
+            if baseline is None or revision is None:
+                values.setdefault('restart-model', {'reason':'robot model revision unavailable at checkpoint comparison',
+                                                     'previous_revision':baseline, 'current_revision':revision})
+            else:
+                values['restart-model'] = {'reason':'robot model changed across the safety checkpoint',
+                                           'previous_revision':baseline, 'current_revision':revision}
         super().__init__(values)
         self.active_boot = True
         self._persist(dict(self))  # Must succeed before any motion can be admitted.
@@ -83,6 +97,24 @@ class DurableQuarantine(dict):
                 self.active_boot = True
                 raise
             self._lockfile.close()
+
+    def resolve_missing_model(self, expected_record, revision):
+        """Atomically remove only a verified missing-model checkpoint."""
+        with self.mutex:
+            current = self.get('restart-model')
+            if (current is not expected_record or current.get('current_revision') is not None
+                    or current.get('previous_revision') != revision):
+                raise RpcError('SafetyViolation', 'model checkpoint changed during recovery')
+            proposed = dict(self)
+            del proposed['restart-model']
+            old_revision = self.revision
+            self.revision = revision
+            try:
+                self._persist(proposed)
+            except Exception:
+                self.revision = old_revision
+                raise
+            super().__delitem__('restart-model')
 
     def pop(self, key, *default):
         with self.mutex:

@@ -41,6 +41,7 @@ def build_agent(
     access_policy=None,
     allow_unverified_stops=False,
     state_dir=None,
+    motion_handoff_path=None,
 ) -> tuple[AgentServer, AgentContext]:
     """Assemble audit + safety + tasks + handlers + server for one profile.
 
@@ -118,6 +119,16 @@ def build_agent(
     journal_path = Path(state_dir) / (hashlib.sha256(profile.info.name.encode()).hexdigest()+'.sqlite3') if state_dir is not None else None
     ctx.commands = CommandLedger(ctx.boot_epoch, path=journal_path, on_failure=journal_failure, audit=audit)
     ctx.tasks.ledger = ctx.commands
+    if motion_handoff_path is not None:
+        if state_dir is None:
+            raise ValueError('Motion handoff requires a persistent state directory')
+        from .motion_journal import MotionJournal
+        from .motion_handoff import MotionHandoff
+        from .motion_recorder import MotionRecorder
+        ctx.motion_journal = MotionJournal(Path(state_dir) / ('motion-' + hashlib.sha256(profile.info.name.encode()).hexdigest() + '.sqlite3'))
+        ctx.motion_handoff = MotionHandoff(ctx.motion_journal, motion_handoff_path)
+        ctx.motion_recorder = MotionRecorder(ctx.motion_journal)
+        ctx.tasks.motion_recorder = ctx.motion_recorder
     if ros is not None and groups:
         ctx.control = ControlManager(lock, audit, ros, groups, ctx.safety, stop_policy=profile.spec.safety.stop_verification, allow_unverified_stops=allow_unverified_stops)
     if ros is not None and profile.spec.actions:

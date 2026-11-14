@@ -35,6 +35,8 @@ _TASK_OUTCOME = {
     "failed": Outcome.ERROR,
     "cancelled": Outcome.CANCELLED,
 }
+_MOTION_TASKS = frozenset({'group.start_trajectory', 'group.start_tool',
+                           'mobility.navigate_to', 'mobility.start_route'})
 
 
 class TaskHandle:
@@ -109,6 +111,7 @@ class TaskManager:
         self.retention = retention
         self.max_records = max_records
         self.ledger = None
+        self.motion_recorder = None
         self._tasks: dict[str, TaskRecord] = {}
 
     def start(self, kind: str, session: Session, body: TaskBody, *, resource=None) -> str:
@@ -124,6 +127,9 @@ class TaskManager:
             self.ledger.task_started(record)
         self._tasks[record.id] = record
         record.aio_task = asyncio.ensure_future(self._run(record, body))
+        if self.motion_recorder is not None and kind in _MOTION_TASKS:
+            self.motion_recorder.emit('motion.accepted', operation_id=record.id,
+                                      session_id=session.reconciliation_key, owner=session.principal.identity)
         self._audit.record(
             AuditKind.COMMAND, client=session.client_id, call=kind,
             task_id=record.id, detail={"event": "started", "command_id": record.command_id, "principal": session.principal.identity, "session": session.reconciliation_key, "resource": resource},
@@ -200,6 +206,14 @@ class TaskManager:
                                   progress=1.0 if state == 'succeeded' else None)
             self.ledger.task_finished(record, terminal.model_dump(mode='json'))
         record.finished_at = self._clock()
+        if self.motion_recorder is not None and record.kind in _MOTION_TASKS:
+            fields = {'operation_id': record.id, 'session_id': record.session.reconciliation_key,
+                      'owner': record.session.principal.identity}
+            if (isinstance(record.cleanup, dict) and record.cleanup.get('verified') is True
+                    and record.cleanup.get('criterion') in ('joint-velocity-dwell', 'body-velocity-dwell')):
+                self.motion_recorder.emit('motion.stop_verified', stop_verified=True, **fields)
+            self.motion_recorder.emit({'succeeded': 'motion.completed', 'failed': 'motion.failed',
+                                       'cancelled': 'motion.cancelled'}[state], **fields)
         detail: dict[str, Any] = {"state": state, "command_id": record.command_id, "principal": record.session.principal.identity, "session": record.session.reconciliation_key, "resource": record.resource}
         if error is not None:
             detail["type"] = error.type

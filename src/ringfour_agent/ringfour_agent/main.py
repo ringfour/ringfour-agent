@@ -63,6 +63,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
                              "~/.ringfour/audit/<robot-name>)")
     parser.add_argument("--state-dir", default=os.environ.get("RINGFOUR_STATE", os.path.expanduser("~/.ringfour/state")),
                         help="durable safety state directory")
+    parser.add_argument("--motion-handoff-socket", default=os.environ.get("RINGFOUR_AGENT_MOTION_SOCKET"),
+                        help="optional local motion-journal socket in a private directory")
     parser.add_argument("--trusted-tcp", action="store_true",
                         help="grant operator permissions to every TCP peer; only for a trusted simulator/private gateway deployment")
     # ros2 run appends --ros-args; tolerate and ignore unknown trailing args.
@@ -129,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             audit_dir=args.audit_dir,
             ros=ros,
             state_dir=args.state_dir,
+            motion_handoff_path=args.motion_handoff_socket,
             access_policy=AccessPolicy(trusted_tcp=args.trusted_tcp),
         )
     except (GroupValidationError, RpcError) as exc:

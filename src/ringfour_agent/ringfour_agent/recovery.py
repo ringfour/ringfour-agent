@@ -3,6 +3,34 @@ from .server import RpcError
 from .stopping import require_mobility_stop, verify_mobility_stop
 
 
+def recover_missing_model(ctx):
+    """Reconcile only a missing startup observation against its old hash.
+
+    This is not stop verification and never releases the global inhibit.
+    """
+    with ctx.lock.mutex:
+        record = ctx.lock.quarantine.get('restart-model')
+        if (not isinstance(record, dict) or record.get('current_revision') is not None
+                or record.get('reason') not in ('robot model changed across the safety checkpoint',
+                                                'robot model revision unavailable at checkpoint comparison')):
+            raise RpcError('SafetyViolation', 'no missing-model checkpoint can be reconciled')
+        expected = record.get('previous_revision')
+        if not isinstance(expected, str) or len(expected) != 64 or any(c not in '0123456789abcdef' for c in expected):
+            raise RpcError('StopUnverified', 'checkpoint has no valid previous model hash')
+        if not ctx.state.estop_engaged or ctx.lock.owner is not None or ctx.tasks.has_running():
+            raise RpcError('SafetyViolation', 'model reconciliation requires an idle inhibited agent')
+        if ctx.ros is None or not hasattr(ctx.ros, 'description_sha') or ctx.ros.description_sha() != expected:
+            raise RpcError('StopUnverified', 'live model is missing or differs from the checkpoint')
+        resolve = getattr(ctx.lock.quarantine, 'resolve_missing_model', None)
+        if resolve is None:
+            raise RpcError('CleanupFailed', 'model checkpoint is not durable')
+        if ctx.ros.description_sha() != expected:
+            raise RpcError('StopUnverified', 'live model changed during recovery')
+        resolve(record, expected)
+    return {'resource': 'restart-model', 'recovered': True, 'inhibit_engaged': True,
+            'model_revision': expected, 'physical_stop': 'unverified'}
+
+
 def recover_mobility(ctx):
     with ctx.lock.mutex:
         if "mobility" not in ctx.lock.quarantine:

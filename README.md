@@ -13,4 +13,13 @@ For Python packaging: `uv build`. `ringfour-agent` and `ringfour-onboard` are th
 
 Mount a reviewed profile at `/etc/ringfour/profile.yaml` and durable state at `/var/lib/ringfour`. Configure ROS discovery for your deployment explicitly. Never discard an old agent's journal/quarantine state during migration. See [migration notes](../ringfour-testing/MIGRATION.md).
 
+If a legacy checkpoint recorded a missing startup description as a model
+change, an authenticated local operator may request `safety.recover` for
+`restart-model`. This new recovery case succeeds only when the old checkpoint
+had a known model hash, the startup observation was missing (not different),
+and the currently observed model exactly matches that hash. The Agent must be
+idle and inhibited. It removes only that model quarantine; the inhibit and any
+unclean-restart quarantine remain, and no physical stop is asserted. A genuine
+model change or unavailable model still requires investigation.
+
 Tests and the dashboard live in [ringfour-testing](../ringfour-testing). This build does not launch or modify a robot or the SaaS stack.

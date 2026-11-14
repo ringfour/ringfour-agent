@@ -78,6 +78,12 @@ class GuardRegistry:
             except Exception:
                 record['cleanup_confirmed']=False
                 raise
+            finally:
+                recorder = getattr(self.ctx, 'motion_recorder', None)
+                if recorder is not None:
+                    recorder.emit('motion.guard_tripped', operation_id=identifier)
+                    if record['cleanup_confirmed'] is False:
+                        recorder.emit('motion.failed', operation_id=identifier)
         record['cleanup']=asyncio.create_task(cleanup())
         self.ctx.background_halts.add(record['cleanup'])
         def done(task):

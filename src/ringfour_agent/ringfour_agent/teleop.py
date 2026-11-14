@@ -126,6 +126,7 @@ class TeleopManager:
                 detail={"reason": "disconnect",
                         "stop_verification": stop_report},
             )
+            return stop_report
 
     # -- commands ----------------------------------------------------------------
 
